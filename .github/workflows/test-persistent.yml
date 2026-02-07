@@ -3,7 +3,7 @@ on: workflow_dispatch
 
 jobs:
   test-linux:
-    runs-on: turk-persistent-ruby-builder-ubuntu-22.04
+    runs-on: turk-persistent-ubuntu-22.04
     steps:
       - name: System Info
         run: |
