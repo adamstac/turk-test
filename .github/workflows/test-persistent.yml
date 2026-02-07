@@ -1,0 +1,19 @@
+name: Test Turk Persistent
+on: workflow_dispatch
+
+jobs:
+  test-linux:
+    runs-on: turk-persistent-ruby-builder-ubuntu-22.04
+    steps:
+      - name: System Info
+        run: |
+          echo "Hello from Turk persistent runner!"
+          echo "---"
+          echo "Hostname: $(hostname)"
+          echo "User: $(whoami)"
+          echo "OS: $(uname -a)"
+          echo "---"
+          echo "This runner uses a cached template"
+          echo "Checking for warm cache..."
+          ls -la ~/.gem 2>/dev/null || echo "No gem cache yet"
+          ls -la ~/.bundle 2>/dev/null || echo "No bundle cache yet"
