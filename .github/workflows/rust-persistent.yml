@@ -1,0 +1,112 @@
+# Rust Persistent Runner Test
+# Copy to: adamstac/turk-test/.github/workflows/rust-persistent.yml
+#
+# This workflow tests the persistent runner with Rust:
+# - First run: Downloads and installs Rust toolchain (~300MB), creates template snapshot
+# - Subsequent runs: Clones instantly, Rust already cached
+#
+# Expected timings:
+# - First run (seeding): 2-3 minutes
+# - Clone runs: ~10-15 seconds
+
+name: Rust Persistent Runner Test
+
+on:
+  workflow_dispatch:
+    inputs:
+      force_install:
+        description: 'Force reinstall Rust even if cached'
+        required: false
+        default: 'false'
+        type: boolean
+
+jobs:
+  rust-build:
+    runs-on: [self-hosted, turk-persistent-rust-builder-ubuntu-22.04]
+
+    steps:
+      - name: Check for cached Rust
+        id: cache-check
+        run: |
+          if command -v cargo &> /dev/null && [ "${{ inputs.force_install }}" != "true" ]; then
+            echo "rust_cached=true" >> $GITHUB_OUTPUT
+            echo "Rust is already installed (cached from template)"
+          else
+            echo "rust_cached=false" >> $GITHUB_OUTPUT
+            echo "Rust not found, will install"
+          fi
+
+      - name: Install Rust (only on first run / seeding)
+        if: steps.cache-check.outputs.rust_cached == 'false'
+        run: |
+          echo "Installing Rust toolchain..."
+          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain stable
+          echo "$HOME/.cargo/bin" >> $GITHUB_PATH
+
+          # Verify installation
+          source $HOME/.cargo/env
+          rustc --version
+          cargo --version
+
+      - name: Load Rust environment
+        run: |
+          if [ -f "$HOME/.cargo/env" ]; then
+            source $HOME/.cargo/env
+          fi
+          echo "$HOME/.cargo/bin" >> $GITHUB_PATH
+
+      - name: Show Rust version
+        run: |
+          echo "=== Rust Environment ==="
+          which rustc
+          rustc --version
+          cargo --version
+          rustup show
+          echo ""
+          echo "=== Cargo cache location ==="
+          echo "CARGO_HOME: ${CARGO_HOME:-$HOME/.cargo}"
+          du -sh $HOME/.cargo 2>/dev/null || echo "Cargo directory not found"
+          du -sh $HOME/.rustup 2>/dev/null || echo "Rustup directory not found"
+
+      - name: Create and build hello world
+        run: |
+          WORKDIR="/tmp/rust-hello-${{ github.run_id }}"
+          mkdir -p "$WORKDIR"
+          cd "$WORKDIR"
+
+          echo "=== Creating Rust project ==="
+          cargo init --name hello_turk
+
+          # Add a simple message to main.rs
+          cat > src/main.rs << 'EOF'
+          fn main() {
+              println!("Hello from Turk persistent runner!");
+              println!("Run ID: {}", env!("CARGO_PKG_NAME"));
+              println!("Rust is cached and ready to go!");
+          }
+          EOF
+
+          echo "=== Building release binary ==="
+          time cargo build --release
+
+          echo "=== Running binary ==="
+          ./target/release/hello_turk
+
+          echo "=== Build artifacts ==="
+          ls -la target/release/hello_turk
+
+      - name: Summary
+        run: |
+          echo "## Rust Persistent Runner Test Results" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          if [ "${{ steps.cache-check.outputs.rust_cached }}" == "true" ]; then
+            echo "**Cache Status:** HIT - Rust was already installed from template snapshot" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "**Cache Status:** MISS - Rust was installed fresh (seeding run)" >> $GITHUB_STEP_SUMMARY
+          fi
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Rust Version:** $(rustc --version)" >> $GITHUB_STEP_SUMMARY
+          echo "**Cargo Version:** $(cargo --version)" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Cargo cache size:** $(du -sh $HOME/.cargo 2>/dev/null | cut -f1 || echo 'N/A')" >> $GITHUB_STEP_SUMMARY
+          echo "**Rustup size:** $(du -sh $HOME/.rustup 2>/dev/null | cut -f1 || echo 'N/A')" >> $GITHUB_STEP_SUMMARY
