@@ -10,16 +10,6 @@
 name: Network Isolation Test
 on:
   workflow_dispatch:
-    inputs:
-      runner_count:
-        description: 'Number of concurrent runners to test'
-        required: false
-        default: '3'
-        type: choice
-        options:
-          - '2'
-          - '3'
-          - '4'
 
 jobs:
   # Run multiple concurrent runners to test isolation between them
@@ -52,8 +42,12 @@ jobs:
       - name: Test DNS resolution (MUST work)
         run: |
           echo "Testing DNS resolution..."
-          if nslookup github.com > /dev/null 2>&1; then
-            echo "✅ DNS resolution: PASS"
+          # Use getent which is always available, or fall back to curl
+          if getent hosts github.com > /dev/null 2>&1; then
+            echo "✅ DNS resolution: PASS (via getent)"
+            getent hosts github.com
+          elif curl -sf --connect-timeout 5 https://github.com > /dev/null 2>&1; then
+            echo "✅ DNS resolution: PASS (via curl)"
           else
             echo "❌ DNS resolution: FAIL"
             exit 1
@@ -66,8 +60,11 @@ jobs:
           MY_IP=$(hostname -I | awk '{print $1}')
           SUBNET=$(echo $MY_IP | cut -d. -f1-3)
 
+          echo "My IP: $MY_IP"
+          echo "Subnet: $SUBNET.0/24"
+
           FOUND_OTHERS=0
-          for i in $(seq 1 254); do
+          for i in $(seq 2 254); do
             TARGET="${SUBNET}.${i}"
             if [ "$TARGET" != "$MY_IP" ]; then
               # Quick ping with 1 second timeout
@@ -87,13 +84,13 @@ jobs:
             # Don't exit 1 - we want to collect all results
           fi
 
-      - name: Test host bridge access (SHOULD fail)
+      - name: Test host bridge access (informational)
         run: |
           echo "Testing if we can reach the host bridge (10.100.0.1)..."
           if ping -c 1 -W 2 10.100.0.1 > /dev/null 2>&1; then
-            echo "⚠️  Host bridge reachable - this may be expected for DHCP/gateway"
+            echo "ℹ️  Host bridge reachable (expected for gateway/DHCP)"
           else
-            echo "✅ Host bridge not directly reachable"
+            echo "ℹ️  Host bridge not directly reachable"
           fi
 
       - name: Summary
@@ -128,6 +125,18 @@ jobs:
             exit 1
           fi
 
+      - name: Test DNS resolution (MUST work)
+        run: |
+          echo "Testing DNS resolution..."
+          if getent hosts github.com > /dev/null 2>&1; then
+            echo "✅ DNS resolution: PASS"
+          elif curl -sf --connect-timeout 5 https://github.com > /dev/null 2>&1; then
+            echo "✅ DNS resolution: PASS (via curl)"
+          else
+            echo "❌ DNS resolution: FAIL"
+            exit 1
+          fi
+
       - name: Scan for other containers (SHOULD find nothing reachable)
         id: test-isolation
         run: |
@@ -136,7 +145,7 @@ jobs:
           SUBNET=$(echo $MY_IP | cut -d. -f1-3)
 
           FOUND_OTHERS=0
-          for i in $(seq 1 254); do
+          for i in $(seq 2 254); do
             TARGET="${SUBNET}.${i}"
             if [ "$TARGET" != "$MY_IP" ]; then
               if ping -c 1 -W 1 "$TARGET" > /dev/null 2>&1; then
@@ -186,6 +195,18 @@ jobs:
             exit 1
           fi
 
+      - name: Test DNS resolution (MUST work)
+        run: |
+          echo "Testing DNS resolution..."
+          if getent hosts github.com > /dev/null 2>&1; then
+            echo "✅ DNS resolution: PASS"
+          elif curl -sf --connect-timeout 5 https://github.com > /dev/null 2>&1; then
+            echo "✅ DNS resolution: PASS (via curl)"
+          else
+            echo "❌ DNS resolution: FAIL"
+            exit 1
+          fi
+
       - name: Scan for other containers (SHOULD find nothing reachable)
         id: test-isolation
         run: |
@@ -194,7 +215,7 @@ jobs:
           SUBNET=$(echo $MY_IP | cut -d. -f1-3)
 
           FOUND_OTHERS=0
-          for i in $(seq 1 254); do
+          for i in $(seq 2 254); do
             TARGET="${SUBNET}.${i}"
             if [ "$TARGET" != "$MY_IP" ]; then
               if ping -c 1 -W 1 "$TARGET" > /dev/null 2>&1; then
@@ -278,3 +299,23 @@ jobs:
           else
             echo "✅ All runners have unique IPs"
           fi
+
+      - name: Verify IPs are on isolated network
+        run: |
+          IP_A="${{ needs.runner-a.outputs.ip_address }}"
+          IP_B="${{ needs.runner-b.outputs.ip_address }}"
+          IP_C="${{ needs.runner-c.outputs.ip_address }}"
+
+          # Check all IPs are on the turk-isolated subnet (10.100.0.x)
+          for IP in "$IP_A" "$IP_B" "$IP_C"; do
+            if [[ "$IP" == 10.100.0.* ]]; then
+              echo "✅ $IP is on turk-isolated network"
+            else
+              echo "❌ $IP is NOT on turk-isolated network (expected 10.100.0.x)"
+              echo "This means the turk-runner profile is not being applied"
+              exit 1
+            fi
+          done
+
+          echo ""
+          echo "✅ All runners are on the isolated network"
