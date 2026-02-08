@@ -17,7 +17,7 @@ on:
 
 jobs:
   bun-build:
-    runs-on: [self-hosted, turk-persistent-bun-builder-ubuntu-22.04]
+    runs-on: [self-hosted, turk-persistent-bun-builder-ubuntu-22.04, "run-${{ github.run_id }}"]
 
     steps:
       - name: Check for cached Bun
