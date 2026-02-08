@@ -1,0 +1,183 @@
+# Bun Persistent Runner Test
+# Tests persistent runner with Bun and heavy dependencies
+#
+# First run: Installs Bun + ~50 packages (~200MB node_modules)
+# Clone runs: Everything cached, near-instant
+
+name: Bun Persistent Runner Test
+
+on:
+  workflow_dispatch:
+    inputs:
+      force_install:
+        description: 'Force reinstall dependencies'
+        required: false
+        default: 'false'
+        type: boolean
+
+jobs:
+  bun-build:
+    runs-on: [self-hosted, turk-persistent-bun-builder-ubuntu-22.04]
+
+    steps:
+      - name: Check for cached Bun
+        id: cache-check
+        run: |
+          if command -v bun &> /dev/null && [ "${{ inputs.force_install }}" != "true" ]; then
+            echo "bun_cached=true" >> $GITHUB_OUTPUT
+            echo "Bun is already installed (cached from template)"
+          else
+            echo "bun_cached=false" >> $GITHUB_OUTPUT
+            echo "Bun not found, will install"
+          fi
+
+      - name: Install Bun (only on first run / seeding)
+        if: steps.cache-check.outputs.bun_cached == 'false'
+        run: |
+          echo "Installing Bun..."
+          curl -fsSL https://bun.sh/install | bash
+          echo "$HOME/.bun/bin" >> $GITHUB_PATH
+          export PATH="$HOME/.bun/bin:$PATH"
+          bun --version
+
+      - name: Load Bun environment
+        run: |
+          echo "$HOME/.bun/bin" >> $GITHUB_PATH
+          export PATH="$HOME/.bun/bin:$PATH"
+
+      - name: Show Bun version
+        run: |
+          echo "=== Bun Environment ==="
+          which bun
+          bun --version
+          echo ""
+          echo "=== Bun cache location ==="
+          echo "BUN_INSTALL: ${BUN_INSTALL:-$HOME/.bun}"
+          du -sh $HOME/.bun 2>/dev/null || echo "Bun directory not found"
+
+      - name: Create project with dependencies
+        run: |
+          WORKDIR="/tmp/bun-app-${{ github.run_id }}"
+          mkdir -p "$WORKDIR"
+          cd "$WORKDIR"
+
+          echo "=== Initializing Bun project ==="
+          bun init -y
+
+          # Check if node_modules already cached from seeding
+          if [ -d "$HOME/.bun-project-cache/node_modules" ]; then
+            echo "Using cached node_modules from template"
+            cp -r "$HOME/.bun-project-cache/node_modules" .
+            cp "$HOME/.bun-project-cache/bun.lockb" . 2>/dev/null || true
+            cp "$HOME/.bun-project-cache/package.json" . 2>/dev/null || true
+            DEPS_CACHED=true
+          else
+            DEPS_CACHED=false
+          fi
+
+          if [ "$DEPS_CACHED" != "true" ] || [ "${{ inputs.force_install }}" == "true" ]; then
+            echo "=== Installing production dependencies ==="
+            # Web framework
+            bun add hono @hono/node-server
+
+            # Database/ORM
+            bun add drizzle-orm better-sqlite3
+            bun add -d drizzle-kit @types/better-sqlite3
+
+            # Validation & utilities
+            bun add zod nanoid slugify date-fns lodash-es
+
+            # Auth & security
+            bun add jose bcryptjs helmet
+            bun add -d @types/bcryptjs
+
+            # API & HTTP
+            bun add ky retry axios
+
+            # Logging & monitoring
+            bun add pino pino-pretty
+
+            # Testing
+            bun add -d @types/bun vitest @vitest/coverage-v8
+
+            # Misc utilities
+            bun add chalk ora dotenv
+            bun add -d typescript @types/node prettier eslint
+
+            echo "=== Caching node_modules for future runs ==="
+            mkdir -p "$HOME/.bun-project-cache"
+            cp -r node_modules "$HOME/.bun-project-cache/"
+            cp bun.lockb "$HOME/.bun-project-cache/" 2>/dev/null || true
+            cp package.json "$HOME/.bun-project-cache/"
+          fi
+
+          echo "=== Dependencies installed ==="
+          cat package.json
+
+      - name: Build sample app
+        run: |
+          WORKDIR="/tmp/bun-app-${{ github.run_id }}"
+          cd "$WORKDIR"
+
+          cat > index.ts << 'EOF'
+          import { Hono } from 'hono';
+          import { z } from 'zod';
+          import { nanoid } from 'nanoid';
+          import pino from 'pino';
+
+          const logger = pino({ level: 'info' });
+          const app = new Hono();
+
+          const UserSchema = z.object({
+            name: z.string().min(1),
+            email: z.string().email(),
+          });
+
+          app.get('/', (c) => {
+            const requestId = nanoid();
+            logger.info({ requestId }, 'Hello from Turk!');
+            return c.json({
+              message: 'Hello from Turk persistent runner!',
+              requestId,
+              runtime: 'Bun ' + Bun.version,
+            });
+          });
+
+          app.post('/users', async (c) => {
+            const body = await c.req.json();
+            const user = UserSchema.parse(body);
+            return c.json({ id: nanoid(), ...user });
+          });
+
+          console.log('Bun app built successfully!');
+          console.log('Dependencies loaded and validated.');
+          console.log('Bun version:', Bun.version);
+          EOF
+
+          echo "=== Type checking ==="
+          bun run tsc --noEmit --skipLibCheck index.ts 2>/dev/null || echo "Type check completed"
+
+          echo "=== Running app ==="
+          timeout 2 bun run index.ts || true
+
+      - name: Summary
+        run: |
+          WORKDIR="/tmp/bun-app-${{ github.run_id }}"
+          cd "$WORKDIR"
+          
+          echo "## Bun Persistent Runner Test Results" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          if [ "${{ steps.cache-check.outputs.bun_cached }}" == "true" ]; then
+            echo "**Cache Status:** HIT - Bun was already installed" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "**Cache Status:** MISS - Bun was installed fresh (seeding run)" >> $GITHUB_STEP_SUMMARY
+          fi
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Bun Version:** $(bun --version)" >> $GITHUB_STEP_SUMMARY
+          echo "**node_modules size:** $(du -sh node_modules 2>/dev/null | cut -f1 || echo 'N/A')" >> $GITHUB_STEP_SUMMARY
+          echo "**Package count:** $(ls node_modules | wc -l) packages" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Installed packages" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          cat package.json | grep -A 100 '"dependencies"' | head -30 >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
