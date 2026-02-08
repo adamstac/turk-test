@@ -22,7 +22,7 @@ on:
 
 jobs:
   rust-build:
-    runs-on: [self-hosted, turk-persistent-rust-builder-ubuntu-22.04]
+    runs-on: [self-hosted, turk-persistent-rust-builder-ubuntu-22.04, "run-${{ github.run_id }}"]
 
     steps:
       - name: Check for cached Rust
