@@ -3,17 +3,24 @@ on: workflow_dispatch
 
 jobs:
   test-linux:
-    runs-on: turk-persistent-ubuntu-22.04
+    runs-on: turk-persistent-testcache-ubuntu-22.04
     steps:
       - name: System Info
         run: |
           echo "Hello from Turk persistent runner!"
-          echo "---"
           echo "Hostname: $(hostname)"
           echo "User: $(whoami)"
-          echo "OS: $(uname -a)"
-          echo "---"
-          echo "This runner uses a cached template"
-          echo "Checking for warm cache..."
-          ls -la ~/.gem 2>/dev/null || echo "No gem cache yet"
-          ls -la ~/.bundle 2>/dev/null || echo "No bundle cache yet"
+          echo "Job ID: $GITHUB_RUN_ID"
+          
+      - name: Check Cache State
+        run: |
+          MARKER="/home/ubuntu/.cache/turk-test/marker"
+          if [ -f "$MARKER" ]; then
+            echo "CACHE HIT: $(cat $MARKER)"
+            echo "Template was seeded previously!"
+          else
+            echo "CACHE MISS: First run, creating marker"
+            mkdir -p /home/ubuntu/.cache/turk-test
+            echo "seeded-$(date +%s)" > "$MARKER"
+            echo "Marker created for future runs"
+          fi
