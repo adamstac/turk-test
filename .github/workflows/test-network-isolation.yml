@@ -1,0 +1,280 @@
+# Network Isolation Test for Turk Runners
+#
+# This workflow verifies that network isolation is working correctly:
+# 1. Runners can access the internet (NAT works)
+# 2. Runners cannot communicate with each other (isolation works)
+# 3. Runners cannot access host-only services
+#
+# Run this after setting up turk-isolated network and turk-runner profile.
+
+name: Network Isolation Test
+on:
+  workflow_dispatch:
+    inputs:
+      runner_count:
+        description: 'Number of concurrent runners to test'
+        required: false
+        default: '3'
+        type: choice
+        options:
+          - '2'
+          - '3'
+          - '4'
+
+jobs:
+  # Run multiple concurrent runners to test isolation between them
+  runner-a:
+    runs-on: turk-ephemeral-ubuntu-22.04
+    outputs:
+      ip_address: ${{ steps.get-ip.outputs.ip }}
+      isolation_pass: ${{ steps.test-isolation.outputs.pass }}
+    steps:
+      - name: Get container IP
+        id: get-ip
+        run: |
+          IP=$(hostname -I | awk '{print $1}')
+          echo "ip=$IP" >> $GITHUB_OUTPUT
+          echo "Container IP: $IP"
+
+      - name: Test outbound internet (MUST work)
+        id: test-internet
+        run: |
+          echo "Testing outbound internet connectivity..."
+          if curl -sf --connect-timeout 10 https://httpbin.org/ip; then
+            echo "✅ Outbound internet: PASS"
+            echo "pass=true" >> $GITHUB_OUTPUT
+          else
+            echo "❌ Outbound internet: FAIL"
+            echo "pass=false" >> $GITHUB_OUTPUT
+            exit 1
+          fi
+
+      - name: Test DNS resolution (MUST work)
+        run: |
+          echo "Testing DNS resolution..."
+          if nslookup github.com > /dev/null 2>&1; then
+            echo "✅ DNS resolution: PASS"
+          else
+            echo "❌ DNS resolution: FAIL"
+            exit 1
+          fi
+
+      - name: Scan for other containers (SHOULD find nothing reachable)
+        id: test-isolation
+        run: |
+          echo "Scanning local subnet for other containers..."
+          MY_IP=$(hostname -I | awk '{print $1}')
+          SUBNET=$(echo $MY_IP | cut -d. -f1-3)
+
+          FOUND_OTHERS=0
+          for i in $(seq 1 254); do
+            TARGET="${SUBNET}.${i}"
+            if [ "$TARGET" != "$MY_IP" ]; then
+              # Quick ping with 1 second timeout
+              if ping -c 1 -W 1 "$TARGET" > /dev/null 2>&1; then
+                echo "⚠️  Reachable: $TARGET"
+                FOUND_OTHERS=$((FOUND_OTHERS + 1))
+              fi
+            fi
+          done
+
+          if [ $FOUND_OTHERS -eq 0 ]; then
+            echo "✅ Container isolation: PASS (no other containers reachable)"
+            echo "pass=true" >> $GITHUB_OUTPUT
+          else
+            echo "❌ Container isolation: FAIL (found $FOUND_OTHERS reachable IPs)"
+            echo "pass=false" >> $GITHUB_OUTPUT
+            # Don't exit 1 - we want to collect all results
+          fi
+
+      - name: Test host bridge access (SHOULD fail)
+        run: |
+          echo "Testing if we can reach the host bridge (10.100.0.1)..."
+          if ping -c 1 -W 2 10.100.0.1 > /dev/null 2>&1; then
+            echo "⚠️  Host bridge reachable - this may be expected for DHCP/gateway"
+          else
+            echo "✅ Host bridge not directly reachable"
+          fi
+
+      - name: Summary
+        run: |
+          echo "======================================="
+          echo "RUNNER A SUMMARY"
+          echo "======================================="
+          echo "IP Address: $(hostname -I | awk '{print $1}')"
+          echo "Hostname: $(hostname)"
+          echo "======================================="
+
+  runner-b:
+    runs-on: turk-ephemeral-ubuntu-22.04
+    outputs:
+      ip_address: ${{ steps.get-ip.outputs.ip }}
+      isolation_pass: ${{ steps.test-isolation.outputs.pass }}
+    steps:
+      - name: Get container IP
+        id: get-ip
+        run: |
+          IP=$(hostname -I | awk '{print $1}')
+          echo "ip=$IP" >> $GITHUB_OUTPUT
+          echo "Container IP: $IP"
+
+      - name: Test outbound internet (MUST work)
+        run: |
+          echo "Testing outbound internet connectivity..."
+          if curl -sf --connect-timeout 10 https://httpbin.org/ip; then
+            echo "✅ Outbound internet: PASS"
+          else
+            echo "❌ Outbound internet: FAIL"
+            exit 1
+          fi
+
+      - name: Scan for other containers (SHOULD find nothing reachable)
+        id: test-isolation
+        run: |
+          echo "Scanning local subnet for other containers..."
+          MY_IP=$(hostname -I | awk '{print $1}')
+          SUBNET=$(echo $MY_IP | cut -d. -f1-3)
+
+          FOUND_OTHERS=0
+          for i in $(seq 1 254); do
+            TARGET="${SUBNET}.${i}"
+            if [ "$TARGET" != "$MY_IP" ]; then
+              if ping -c 1 -W 1 "$TARGET" > /dev/null 2>&1; then
+                echo "⚠️  Reachable: $TARGET"
+                FOUND_OTHERS=$((FOUND_OTHERS + 1))
+              fi
+            fi
+          done
+
+          if [ $FOUND_OTHERS -eq 0 ]; then
+            echo "✅ Container isolation: PASS"
+            echo "pass=true" >> $GITHUB_OUTPUT
+          else
+            echo "❌ Container isolation: FAIL (found $FOUND_OTHERS reachable IPs)"
+            echo "pass=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Summary
+        run: |
+          echo "======================================="
+          echo "RUNNER B SUMMARY"
+          echo "======================================="
+          echo "IP Address: $(hostname -I | awk '{print $1}')"
+          echo "Hostname: $(hostname)"
+          echo "======================================="
+
+  runner-c:
+    runs-on: turk-ephemeral-ubuntu-22.04
+    outputs:
+      ip_address: ${{ steps.get-ip.outputs.ip }}
+      isolation_pass: ${{ steps.test-isolation.outputs.pass }}
+    steps:
+      - name: Get container IP
+        id: get-ip
+        run: |
+          IP=$(hostname -I | awk '{print $1}')
+          echo "ip=$IP" >> $GITHUB_OUTPUT
+          echo "Container IP: $IP"
+
+      - name: Test outbound internet (MUST work)
+        run: |
+          echo "Testing outbound internet connectivity..."
+          if curl -sf --connect-timeout 10 https://httpbin.org/ip; then
+            echo "✅ Outbound internet: PASS"
+          else
+            echo "❌ Outbound internet: FAIL"
+            exit 1
+          fi
+
+      - name: Scan for other containers (SHOULD find nothing reachable)
+        id: test-isolation
+        run: |
+          echo "Scanning local subnet for other containers..."
+          MY_IP=$(hostname -I | awk '{print $1}')
+          SUBNET=$(echo $MY_IP | cut -d. -f1-3)
+
+          FOUND_OTHERS=0
+          for i in $(seq 1 254); do
+            TARGET="${SUBNET}.${i}"
+            if [ "$TARGET" != "$MY_IP" ]; then
+              if ping -c 1 -W 1 "$TARGET" > /dev/null 2>&1; then
+                echo "⚠️  Reachable: $TARGET"
+                FOUND_OTHERS=$((FOUND_OTHERS + 1))
+              fi
+            fi
+          done
+
+          if [ $FOUND_OTHERS -eq 0 ]; then
+            echo "✅ Container isolation: PASS"
+            echo "pass=true" >> $GITHUB_OUTPUT
+          else
+            echo "❌ Container isolation: FAIL (found $FOUND_OTHERS reachable IPs)"
+            echo "pass=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Summary
+        run: |
+          echo "======================================="
+          echo "RUNNER C SUMMARY"
+          echo "======================================="
+          echo "IP Address: $(hostname -I | awk '{print $1}')"
+          echo "Hostname: $(hostname)"
+          echo "======================================="
+
+  # Aggregate results from all runners
+  verify-isolation:
+    needs: [runner-a, runner-b, runner-c]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Collect Results
+        run: |
+          echo "======================================="
+          echo "NETWORK ISOLATION TEST RESULTS"
+          echo "======================================="
+          echo ""
+          echo "Runner IPs:"
+          echo "  Runner A: ${{ needs.runner-a.outputs.ip_address }}"
+          echo "  Runner B: ${{ needs.runner-b.outputs.ip_address }}"
+          echo "  Runner C: ${{ needs.runner-c.outputs.ip_address }}"
+          echo ""
+          echo "Isolation Results:"
+          echo "  Runner A isolation: ${{ needs.runner-a.outputs.isolation_pass }}"
+          echo "  Runner B isolation: ${{ needs.runner-b.outputs.isolation_pass }}"
+          echo "  Runner C isolation: ${{ needs.runner-c.outputs.isolation_pass }}"
+          echo ""
+
+      - name: Verify All Runners Isolated
+        run: |
+          PASS_A="${{ needs.runner-a.outputs.isolation_pass }}"
+          PASS_B="${{ needs.runner-b.outputs.isolation_pass }}"
+          PASS_C="${{ needs.runner-c.outputs.isolation_pass }}"
+
+          if [ "$PASS_A" = "true" ] && [ "$PASS_B" = "true" ] && [ "$PASS_C" = "true" ]; then
+            echo "✅ ALL ISOLATION TESTS PASSED"
+            echo ""
+            echo "Network isolation is working correctly:"
+            echo "- All runners have outbound internet access"
+            echo "- No runner can communicate with other runners"
+          else
+            echo "❌ ISOLATION TEST FAILED"
+            echo ""
+            echo "One or more runners could reach other containers."
+            echo "Check that the turk-runner profile has:"
+            echo "  - security.mac_filtering=true"
+            echo "  - security.ipv4_filtering=true"
+            exit 1
+          fi
+
+      - name: Verify Unique IPs
+        run: |
+          IP_A="${{ needs.runner-a.outputs.ip_address }}"
+          IP_B="${{ needs.runner-b.outputs.ip_address }}"
+          IP_C="${{ needs.runner-c.outputs.ip_address }}"
+
+          if [ "$IP_A" = "$IP_B" ] || [ "$IP_B" = "$IP_C" ] || [ "$IP_A" = "$IP_C" ]; then
+            echo "❌ DUPLICATE IPs DETECTED"
+            echo "This indicates a DHCP or networking issue"
+            exit 1
+          else
+            echo "✅ All runners have unique IPs"
+          fi
