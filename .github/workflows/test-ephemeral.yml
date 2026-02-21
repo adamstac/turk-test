@@ -3,7 +3,7 @@ on: workflow_dispatch
 
 jobs:
   test-linux:
-    runs-on: turk-ephemeral-ubuntu-22.04
+    runs-on: [self-hosted, turk-ephemeral-ubuntu-22.04, "run-${{ github.run_id }}"]
     steps:
       - name: System Info
         run: |
